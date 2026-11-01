@@ -9,18 +9,22 @@ import { AppError } from "../utils/AppError.js";
 const MAX_ATTEMPTS = 3;
 
 // Model names change over time. We try the one in .env first (GEMINI_MODEL),
-// then these, and skip any that Google says do not exist.
+// then these. A model that does not exist is skipped, and a model that is out
+// of free quota is skipped for this request (each model has its own allowance).
 const FALLBACK_MODELS = [
   "gemini-flash-latest",
+  "gemini-flash-lite-latest",
   "gemini-3-flash-preview",
   "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
 ];
 
 // How many clues must point to the culprit. Must match mysterySchema.js.
 const SUPPORTING_CLUES = { easy: 3, medium: 4, hard: 5 };
 
 let client = null; // created on first use, after .env is loaded
-let modelIndex = 0; // remembers which model worked
+let lastModelUsed = ""; // for the log message
+const missingModels = new Set(); // models Google says do not exist
 
 function getClient() {
   if (!process.env.GEMINI_API_KEY) {
@@ -38,7 +42,7 @@ function getClient() {
 
 function getModels() {
   const list = [process.env.GEMINI_MODEL, ...FALLBACK_MODELS].filter(Boolean);
-  return [...new Set(list)];
+  return [...new Set(list)].filter((name) => !missingModels.has(name));
 }
 
 // ---------- Prompt ----------
@@ -117,12 +121,12 @@ function classifyError(err) {
   return "other";
 }
 
-// Sends one prompt and returns the reply text. Skips models that do not exist.
+// Sends one prompt and returns the reply text.
+// Goes through the models in order, skipping ones that are missing or out of quota.
 async function askGemini(prompt) {
-  const models = getModels();
+  let sawBusy = false;
 
-  while (modelIndex < models.length) {
-    const model = models[modelIndex];
+  for (const model of getModels()) {
     try {
       const response = await getClient().models.generateContent({
         model,
@@ -132,25 +136,24 @@ async function askGemini(prompt) {
           responseMimeType: "application/json",
         },
       });
+      lastModelUsed = model;
       return response.text;
     } catch (err) {
       if (err instanceof AppError) throw err;
       const kind = classifyError(err);
 
       if (kind === "model_missing") {
-        console.warn(`Gemini model "${model}" is not available. Trying the next one.`);
-        modelIndex += 1;
+        console.warn(`Gemini model "${model}" is not available. Skipping it.`);
+        missingModels.add(model);
         continue;
       }
       if (kind === "busy") {
-        throw new AppError(
-          503,
-          "AI_BUSY",
-          "The AI is busy or the free limit was reached. Please wait a minute and try again."
-        );
+        console.warn(`Gemini model "${model}" is out of free quota right now. Trying the next one.`);
+        sawBusy = true;
+        continue;
       }
       if (kind === "key") {
-        console.error("Gemini rejected the API key. Check GEMINI_API_KEY in server/.env.");
+        console.error("Gemini rejected the API key. Check GEMINI_API_KEY.");
         throw new AppError(
           500,
           "AI_NOT_CONFIGURED",
@@ -170,7 +173,15 @@ async function askGemini(prompt) {
     }
   }
 
-  console.error("None of the Gemini models worked. Set GEMINI_MODEL in server/.env.");
+  if (sawBusy) {
+    throw new AppError(
+      503,
+      "AI_BUSY",
+      "The AI is busy or the free limit was reached. Please wait a minute and try again."
+    );
+  }
+
+  console.error("None of the Gemini models worked. Set GEMINI_MODEL.");
   throw new AppError(
     503,
     "AI_UNAVAILABLE",
@@ -242,7 +253,7 @@ export async function generateMystery(premise, difficulty) {
     // Shuffle suspects and clues so the culprit is not always in the same place.
     const seconds = Math.round((Date.now() - startedAt) / 1000);
     console.log(
-      `Mystery generated with model "${getModels()[modelIndex]}" in ${seconds} seconds (attempt ${attempt}).`
+      `Mystery generated with model "${lastModelUsed}" in ${seconds} seconds (attempt ${attempt}).`
     );
     return {
       ...result.data,
