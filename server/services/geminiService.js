@@ -207,6 +207,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function generateMystery(premise, difficulty) {
   const schema = buildMysterySchema(difficulty);
   let previousProblem = "";
+  const startedAt = Date.now(); // used to log how long the mystery took
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     let text;
@@ -239,7 +240,10 @@ export async function generateMystery(premise, difficulty) {
     }
 
     // Shuffle suspects and clues so the culprit is not always in the same place.
-    console.log(`Mystery generated with model "${getModels()[modelIndex]}".`);
+    const seconds = Math.round((Date.now() - startedAt) / 1000);
+    console.log(
+      `Mystery generated with model "${getModels()[modelIndex]}" in ${seconds} seconds (attempt ${attempt}).`
+    );
     return {
       ...result.data,
       suspects: shuffle(result.data.suspects),

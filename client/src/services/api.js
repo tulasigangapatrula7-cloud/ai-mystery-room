@@ -6,7 +6,7 @@ import axios from "axios";
 const api = axios.create({
   // Set in client/.env (local) or in Vercel (production). Never hardcode it here.
   baseURL: import.meta.env.VITE_API_URL || "/api",
-     timeout: 150000, // AI generation can take a while
+  timeout: 300000, // 5 minutes: AI generation can be slow on busy days
   headers: { "Content-Type": "application/json" },
 });
 
